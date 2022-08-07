@@ -12,6 +12,7 @@ void USART_Config(uint32_t baud);
 void GPIO_Config();
 void SendTxt(char *Adr);
 void printChar(char c);
+void delay(volatile uint32_t second);
 void FLASH_UnLocker(uint8_t bank);
 void FLASH_Locker(uint8_t bank);
 void FLASH_Erase(uint8_t SER, uint8_t SSB);
@@ -28,31 +29,30 @@ void crc_init_16();
 void downloaded();
 
 
-uint32_t final_data[] = {0x00000000,0x00000000,0x00000000,0x00000000};
-
-volatile uint8_t down_k=0;
-volatile uint8_t down_i=0;
-volatile uint8_t temp =0;
-volatile uint8_t say =0;
-volatile uint8_t sayıcı =0;
-volatile uint8_t ok =0;
-volatile uint32_t count;
-volatile uint8_t whichApp ='\0';
-volatile uint8_t data = '\0';
-volatile uint8_t flag =0;
-volatile uint32_t crc_data;
-#define BOYUT 262144U
+//constant variables
 #define app1_add_start 0x08040000
 #define app1_add_end 0x08080000
-#define app2_add 0x08120000
+#define app2_add_start 0x08120000
+#define app2_add_end 0x08160000
+
+//variables
+volatile uint32_t down_k=0;
+volatile uint8_t down_i=0;
+volatile uint8_t say =0;
+volatile uint8_t ok =0;
+volatile uint32_t delay_count = 0;
+volatile uint32_t download_count = 0;
+volatile uint32_t flash_count = 0;
+volatile uint8_t whichApp ='\0';
+volatile uint8_t data = '\0';
+volatile uint8_t menu_trigger =0;
+volatile uint32_t crc_data;
+
 volatile uint32_t add_count_app1 = app1_add_start;
-uint32_t received_data[] = {0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF}; //eop bitir wnbe check et
-
-
-void delay(volatile uint32_t second) {
-	count = second;
-    while(count);
-}
+volatile uint32_t add_count_app2 = app2_add_start;
+uint32_t received_data[] = {0x00000000};
+uint32_t final_data[] = {0x00000000,0x00000000,0x00000000,0x00000000};
+uint32_t temp_data[16384]; //Flasha yazmadan verileri ram'de depolamak için 64kb yer ayrıldı
 
 int main(void)
 {
@@ -61,34 +61,55 @@ int main(void)
 	crc_init_16();
 	//CRC_Sequence_for_app1();
 
-		 SendTxt("Starting System\n\r");
-		 SysTick_Config(SystemCoreClock/1000);
-		 delay(7000);
-		 BootloaderIsTrigger();
+		SendTxt("Starting System\n\r");
+		for(int i = 0; i<=16384; i++)
+		{
+			temp_data[i] = 0xFFFFFFFF;
+		}
+		SysTick_Config(SystemCoreClock/1000);
+		delay(5000);
+		BootloaderIsTrigger();
 		Bootloader_menu(BootloaderIsTrigger());
 		goto_application();
 
 
 	 while(1)
 	    {
+		 if((ok == 1) & (download_count != 0))
+		 {
+			 delay(999);
+			 if(delay_count == 0)
+			 {
+				 switch((download_count/4)%4)
+				 {
+				 case 0:
+					 flash_count=(download_count/4);
+					 break;
+				 case 1:
+					 flash_count=(download_count/4)+3;
+					 break;
+				 case 2:
+					 flash_count=(download_count/4)+2;
+				 	 break;
+				 case 3:
+					 flash_count=(download_count/4)+1;
+				 	 break;
+				 }
+				for(int i=0; i<=flash_count; i++)
+				{
+					Write_App_1(temp_data);
+				}
+
+			 }
+		 }
 	    }
 	 return 0;
 }
 
 void SysTick_Handler(void)
 {
-	if(count == 5000)
-		SendTxt("Time left to start bootloader (press any key to start): \n\r\n\r");
-	else if(count == 4000)
-		SendTxt("4\n\r");
-	else if(count == 3000)
-		SendTxt("3\n\r");
-	else if(count == 2000)
-		SendTxt("2\n\r");
-	else if(count == 1000)
-		SendTxt("1\n\r");
-	if (count > 0)
-		count--;
+	if (delay_count > 0)
+		delay_count--;
 }
 
 void USART_Config(uint32_t baud) //Bitti
@@ -165,7 +186,7 @@ void FLASH_Locker(uint8_t bank)
 }
 void FLASH_Erase(uint8_t SER, uint8_t SSB)
 {
-	// Bayrakları temizle
+	// Clear Flags
 										//BANK 1
 	FLASH->CCR1 |= 0x10000;				// End of Operation flag clear
 	FLASH->CCR1 |= 0x40000;				// Programming Parallelism error flag clear
@@ -215,8 +236,9 @@ void Bootloader_menu(uint8_t BootloaderIsTrigger)
 		SendTxt("	5) Download mode \n\r");
 		SendTxt("	6) Reset \n\r");
 		/////////////////////////////////////////////////////////////
-
-		while(!(USART3->ISR & 0x20));
+		menu_trigger=0;
+		while(!menu_trigger);
+		//while(!(USART3->ISR & 0x20));
 
 		switch (data)
 		{
@@ -239,7 +261,7 @@ void Bootloader_menu(uint8_t BootloaderIsTrigger)
 		case '5':
 			SendTxt("Upload your application \n\r");
 			ok=1;
-				whichApp = 3;
+			whichApp = 3;
 			break;
 		case '6':
 			whichApp = 0;
@@ -279,7 +301,7 @@ static void goto_application()
 }
 void Delete_App_1()
 {
-	for(int i = 32; i<64; i++)
+	for(int i = 32; i<127; i++)
 	{
 		FLASH_UnLocker(1);
 		FLASH_Erase(1, i);
@@ -289,7 +311,7 @@ void Delete_App_1()
 }
 void Delete_App_2()
 {
-	for(int i = 16; i<48; i++)
+	for(int i = 32; i<48; i++)
 	{
 		FLASH_UnLocker(2);
 		FLASH_Erase(2, i);
@@ -357,53 +379,83 @@ void Write_App_1(uint32_t *data)
 {
 
 	FLASH_UnLocker(1);
-	while (say <= 3)
+	while (say <= flash_count)
 	{
 		FLASH_Write(add_count_app1,data[say]);
 		add_count_app1 = add_count_app1 + 4;
 		say++;
 	}
-	say = 0;
 	FLASH->CR1 &= ~0x2;
 	FLASH_Locker(1);
 }
 void downloaded()
 {
+	received_data[0] |= data;
 	if(down_i<4)
 	{
-			received_data[down_i] = data;
+		switch(down_i)
+		{
+		case 0:
+			temp_data[down_k] &=0x00000000;
+			temp_data[down_k] |= received_data[0];
+			received_data[0] &=0x00000000;
+			break;
+		case 1:
+			temp_data[down_k] &=0x000000FF;
+			temp_data[down_k] |= received_data[0]<<8;
+			received_data[0] &=0x00000000;
+			break;
+		case 2:
+			temp_data[down_k] &=0x0000FFFF;
+			temp_data[down_k] |= received_data[0]<<16;
+			received_data[0] &=0x00000000;
+			break;
+		case 3:
+			temp_data[down_k] &=0x00FFFFFF;
+			temp_data[down_k] |= received_data[0]<<24;
+			received_data[0] &=0x00000000;
+			break;
+		}
 			down_i++;
 	}
 
-	if(down_i==4)
+	if(down_i==4) // 4 e tamamlanmadığı için yazmıyor son kısımları düzelyitlecek
 	{
-			final_data[down_k] |= received_data[0];
-			final_data[down_k] |= received_data[1]<<8;
-			final_data[down_k] |= received_data[2]<<16;
-			final_data[down_k] |= received_data[3]<<24;
-			down_i=0;
-			down_k++;
-			received_data[0] &= 0xFFFFFFFF;
-			received_data[1] &= 0xFFFFFFFF;
-			received_data[2] &= 0xFFFFFFFF;
-			received_data[3] &= 0xFFFFFFFF;
-			if(down_k==4)
-			{
-				Write_App_1(final_data);
-				down_k=0;
-				final_data[0] = 0x00000000;
-				final_data[1] = 0x00000000;
-				final_data[2] = 0x00000000;
-				final_data[3] = 0x00000000;
-			}
+		down_i=0;
+		down_k++;
 	}
 }
+void delay(volatile uint32_t second)
+{
+	delay_count = second;
+	menu_trigger=0;
+    while(delay_count)
+    	{
+    	if(delay_count == 5000)
+    		SendTxt("Time left to start bootloader (press any key to start): 5 \n\r");
+   		else if(delay_count == 4000)
+   			SendTxt("4\n\r");
+    	else if(delay_count == 3000)
+    		SendTxt("3\n\r");
+    	else if(delay_count == 2000)
+    		SendTxt("2\n\r");
+    	else if(delay_count == 1000)
+    		SendTxt("1\n\r");
 
-void USART3_IRQHandler(void){
+    	if(menu_trigger)
+    		break;
+    	}
+}
+void USART3_IRQHandler(void)
+{
 	data = (uint8_t)USART3->RDR;
+	menu_trigger = 1;
 	USART3->ICR |= 0x8; //ORE flag
 	USART3->ICR |= 0x1000;	//EOBF flag
 	if(ok==1)
+	{
 		downloaded();
+		download_count++;
+	}
 }
 
