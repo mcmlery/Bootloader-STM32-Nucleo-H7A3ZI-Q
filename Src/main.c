@@ -23,6 +23,7 @@ uint8_t BootloaderIsTrigger();
 void Bootloader_menu(uint8_t BootloaderIsTrigger);
 void Delete_App_1();
 void Write_App_1(uint32_t *data);
+void Write_App_2(uint32_t *data);
 void Delete_App_2();
 void CRC_Sequence_for_app1();
 void crc_init_16();
@@ -38,21 +39,24 @@ void downloaded();
 //variables
 volatile uint32_t down_k=0;
 volatile uint8_t down_i=0;
-volatile uint8_t say =0;
+volatile uint32_t say =0;
 volatile uint8_t ok =0;
+volatile uint8_t Write_App_1_check=0;
+volatile uint8_t Write_App_2_check=0;
 volatile uint32_t delay_count = 0;
 volatile uint32_t download_count = 0;
 volatile uint32_t flash_count = 0;
 volatile uint8_t whichApp ='\0';
 volatile uint8_t data = '\0';
 volatile uint8_t menu_trigger =0;
+volatile uint8_t upload_trigger =0;
 volatile uint32_t crc_data;
 
 volatile uint32_t add_count_app1 = app1_add_start;
 volatile uint32_t add_count_app2 = app2_add_start;
 uint32_t received_data[] = {0x00000000};
 uint32_t final_data[] = {0x00000000,0x00000000,0x00000000,0x00000000};
-uint32_t temp_data[16384]; //Flasha yazmadan verileri ram'de depolamak için 64kb yer ayrıldı
+uint32_t temp_data[14336]; //Flasha yazmadan verileri ram'de depolamak için 64kb yer ayrıldı
 
 int main(void)
 {
@@ -95,11 +99,18 @@ int main(void)
 					 flash_count=(download_count/4)+1;
 				 	 break;
 				 }
-				for(int i=0; i<=flash_count; i++)
-				{
-					Write_App_1(temp_data);
-				}
 
+				 switch(upload_trigger)
+				 {
+				 case '1':
+					 if(Write_App_1_check==0)
+						 Write_App_1(temp_data);
+				 break;
+				 case '2':
+					 if(Write_App_2_check==0)
+						 Write_App_2(temp_data);
+				 break;
+				 }
 			 }
 		 }
 	    }
@@ -204,14 +215,19 @@ void FLASH_Erase(uint8_t SER, uint8_t SSB)
 	{
 		FLASH->CR1 |= 0x4;				// sektör silme bitini ayarla Bank'a göre (SER)
 		FLASH->CR1 |= SSB << 6;
+		FLASH->CR1 |= 0x20;					// Start biti
+		while(FLASH->SR1 & 0x4);			// İşlemler bitene kadar bekle
 	}
 	else if(SER == 2)
 	{
 		FLASH->CR2 |= 0x4;
 		FLASH->CR2 |= SSB << 6;
+		FLASH->CR2 |= 0x20;					// Start biti
+		while(FLASH->SR2 & 0x4);			// İşlemler bitene kadar bekle
 	}
-	FLASH->CR1 |= 0x20;					// Start biti
-	while(FLASH->SR1 & 0x4);			// İşlemler bitene kadar bekle
+
+	FLASH->CR1 &= 0x0000000 << 6;
+	FLASH->CR2 &= 0x0000000 << 6;
 
 }
 uint8_t BootloaderIsTrigger()
@@ -259,9 +275,29 @@ void Bootloader_menu(uint8_t BootloaderIsTrigger)
 			SendTxt("DELETED !!\n\r");
 			break;
 		case '5':
-			SendTxt("Upload your application \n\r");
-			ok=1;
-			whichApp = 3;
+			SendTxt("Please choose options: \n\r");
+			ok=2;
+			SendTxt("	1) Download app 1 \n\r");
+			SendTxt("	2) Download app 2 \n\r");
+			while(!upload_trigger);
+			if(upload_trigger == '1')
+			{
+				ok=1;
+				SendTxt("Upload your application \n\r");
+				whichApp = 3;
+			}
+
+			else if(upload_trigger == '2')
+			{
+				ok=1;
+				SendTxt("Upload your application \n\r");
+				whichApp = 3;
+			}
+			else
+			{
+				SendTxt("Wrong Command !!\n\r");
+				whichApp = 0;
+			}
 			break;
 		case '6':
 			whichApp = 0;
@@ -293,7 +329,6 @@ static void goto_application()
 			app_reset_handler2();
 			break;
 		case 3:
-			//SendTxt("Upload complete.. \n\r");
 			break;
 		default:
 			break;
@@ -301,7 +336,7 @@ static void goto_application()
 }
 void Delete_App_1()
 {
-	for(int i = 32; i<127; i++)
+	for(int i = 32; i<64; i++)
 	{
 		FLASH_UnLocker(1);
 		FLASH_Erase(1, i);
@@ -311,7 +346,7 @@ void Delete_App_1()
 }
 void Delete_App_2()
 {
-	for(int i = 32; i<48; i++)
+	for(int i = 16; i<48; i++)
 	{
 		FLASH_UnLocker(2);
 		FLASH_Erase(2, i);
@@ -360,16 +395,25 @@ void FLASH_Write(uint32_t address, uint32_t data)
 {
 
 	while(FLASH->SR1 & 0x1);		// Meşguliyet bitene kadar bekle
-	FLASH->CR1 |= 0x2;			// PG biti ayarlandı, Programmin modda		*(__IO uint32_t*)address = data;	// İstenilen adrese istenilen veri yazılıyor.
+	FLASH->CR1 |= 0x2;
+	while(FLASH->SR2 & 0x1);		// Meşguliyet bitene kadar bekle
+	FLASH->CR2 |= 0x2;	// PG biti ayarlandı, Programmin modda		*(__IO uint32_t*)address = data;	// İstenilen adrese istenilen veri yazılıyor.
 	//while((FLASH->SR1 & 0x2) == 0)
 		*(__IO uint32_t*)address =  data;
 
 	while(FLASH->SR1 & 0x4);		// Meşguliyet bitene kadar bekle
 	while(FLASH->SR1 & 0x1);
+	while(FLASH->SR2 & 0x4);		// Meşguliyet bitene kadar bekle
+	while(FLASH->SR2 & 0x1);
 	FLASH->CCR1 |= 0x10000;
 	if((FLASH->SR1 & 0x10000) != 0)	// İşlem sonu biti ayarlandı ise
 	{
 		FLASH->CCR1 |= 0x10000;		// İşlem başarılı oldu, işlem sonu bağrağı temizle
+		//*(__IO uint32_t*)address = data;
+	}
+	if((FLASH->SR2 & 0x10000) != 0)	// İşlem sonu biti ayarlandı ise
+	{
+		FLASH->CCR2 |= 0x10000;		// İşlem başarılı oldu, işlem sonu bağrağı temizle
 		//*(__IO uint32_t*)address = data;
 	}
 			// CR register'ı PG biti başlangıçtaki duruma ayarla
@@ -378,15 +422,35 @@ void FLASH_Write(uint32_t address, uint32_t data)
 void Write_App_1(uint32_t *data)
 {
 
+	Delete_App_1();
 	FLASH_UnLocker(1);
 	while (say <= flash_count)
 	{
 		FLASH_Write(add_count_app1,data[say]);
 		add_count_app1 = add_count_app1 + 4;
+		if(add_count_app1==0x08080000);
 		say++;
 	}
+	SendTxt("Upload Succes");
+	Write_App_1_check=1;
 	FLASH->CR1 &= ~0x2;
 	FLASH_Locker(1);
+}
+void Write_App_2(uint32_t *data)
+{
+
+	Delete_App_2();
+	FLASH_UnLocker(2);
+	while (say <= flash_count)
+	{
+		FLASH_Write(add_count_app2,data[say]);
+		add_count_app2 = add_count_app2 + 4;
+		say++;
+	}
+	SendTxt("Upload Succes");
+	Write_App_2_check=1;
+	FLASH->CR1 &= ~0x2;
+	FLASH_Locker(2);
 }
 void downloaded()
 {
@@ -457,5 +521,7 @@ void USART3_IRQHandler(void)
 		downloaded();
 		download_count++;
 	}
+	else if(ok==2)
+		upload_trigger = data;
 }
 
